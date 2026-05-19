@@ -1,3 +1,11 @@
+# Editor / local history
+.history/
+**/.history/
+
+# Local tool cache / Lighthouse
+.lh/
+**/.lh/
+
 # Dependencies
 node_modules/
 **/node_modules/
