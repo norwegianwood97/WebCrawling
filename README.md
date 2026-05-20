@@ -68,7 +68,6 @@ npm run dev
 
 ## 하지 않는 것
 
-- 공식 사람인 Open API 사용
 - 상세 페이지 방문
 - 이미지형 공고 OCR
 - OpenAI API 또는 AI 판단
