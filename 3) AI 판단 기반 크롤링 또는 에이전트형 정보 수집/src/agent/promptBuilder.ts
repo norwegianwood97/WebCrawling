@@ -83,6 +83,11 @@ export const buildPrompt = (
     `현재 본문 일부:\n${observation.bodyText}`,
     `이전 행동 기록:\n${JSON.stringify(history.slice(-10), null, 2)}`,
     `실패한 행동 기록:\n${JSON.stringify(failedHistory.slice(-10), null, 2)}`,
-    "다음 한 단계만 결정하라. 지역, 직업, 경력 조건이 모두 준비되고 채용 목록 결과 페이지가 보일 때만 extract_results를 반환하라.",
+    "다음 한 단계만 결정하라.",
+    "지역, 직업, 경력 조건이 모두 준비되고 채용 목록 결과 페이지가 보일 때만 extract_results를 반환하라.",
+    "resultListVisible=false 상태에서 wait를 2번 이상 반복하지 마라.",
+    "현재 URL이 /zf_user/jobs/list/domestic 이고 resultListVisible=false이면, https://www.saramin.co.kr/zf_user/jobs/list/job-category?cat_mcls=2 로 goto하라.",
+    "조건이 모두 준비되었지만 resultListVisible=false이면 검색하기 버튼을 클릭하라.",
+    "검색하기 버튼 후보는 '검색하기', '#search_btn', 'button.btn_search.active' 순서로 판단하라.",
   ].join("\n\n");
 };

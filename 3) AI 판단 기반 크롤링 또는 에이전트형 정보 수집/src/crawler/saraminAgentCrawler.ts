@@ -20,7 +20,9 @@ const nextPageSelectors = [
   'button:has-text("다음")',
 ];
 
-const clickNextPage = async (page: import("playwright").Page): Promise<boolean> => {
+const clickNextPage = async (
+  page: import("playwright").Page,
+): Promise<boolean> => {
   const beforeUrl = page.url();
 
   for (const selector of nextPageSelectors) {
@@ -30,17 +32,24 @@ const clickNextPage = async (page: import("playwright").Page): Promise<boolean> 
       continue;
     }
 
-    const ariaDisabled = await locator.getAttribute("aria-disabled").catch(() => "");
+    const ariaDisabled = await locator
+      .getAttribute("aria-disabled")
+      .catch(() => "");
     const className = await locator.getAttribute("class").catch(() => "");
-    const disabled = ariaDisabled === "true" || /disabled|inactive/.test(className || "");
+    const disabled =
+      ariaDisabled === "true" || /disabled|inactive/.test(className || "");
 
     if (disabled) {
       continue;
     }
 
     await locator.click({ timeout: 5000 });
-    await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => undefined);
-    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+    await page
+      .waitForLoadState("domcontentloaded", { timeout: 10_000 })
+      .catch(() => undefined);
+    await page
+      .waitForLoadState("networkidle", { timeout: 10_000 })
+      .catch(() => undefined);
     return page.url() !== beforeUrl || true;
   }
 
@@ -53,8 +62,15 @@ const collectListPages = async (
 ): Promise<JobPosting[]> => {
   const jobs: JobPosting[] = [];
 
-  for (let pageIndex = 1; pageIndex <= config.maxPages && jobs.length < config.maxItems; pageIndex += 1) {
-    const pageJobs = await extractResultsFromPage(page, config.maxItems - jobs.length);
+  for (
+    let pageIndex = 1;
+    pageIndex <= config.maxPages && jobs.length < config.maxItems;
+    pageIndex += 1
+  ) {
+    const pageJobs = await extractResultsFromPage(
+      page,
+      config.maxItems - jobs.length,
+    );
     logResult(`${pageIndex}페이지 공고 ${pageJobs.length}개 발견`);
     jobs.push(...pageJobs);
 
@@ -84,7 +100,12 @@ const enrichDetails = async (
   for (let index = 0; index < limitedJobs.length; index += 1) {
     const job = limitedJobs[index];
     logDetail(`${index + 1}/${limitedJobs.length} 상세 수집`);
-    const details = await extractDetailFromPage(page, config, job.job_url, index + 1);
+    const details = await extractDetailFromPage(
+      page,
+      config,
+      job.job_url,
+      index + 1,
+    );
     Object.assign(job, details);
     await randomDelay(config);
   }
@@ -93,19 +114,47 @@ const enrichDetails = async (
   return jobs;
 };
 
-export const crawlSaraminWithAgent = async (config: AppConfig): Promise<JobPosting[]> => {
+export const crawlSaraminWithAgent = async (
+  config: AppConfig,
+): Promise<JobPosting[]> => {
   const session = await createBrowserSession(config);
 
   try {
     logStep(1, "브라우저 실행");
+
     logStep(2, "사람인 접속");
     await session.page.goto(config.baseUrl, { waitUntil: "domcontentloaded" });
-    await session.page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+    await session.page
+      .waitForLoadState("networkidle", { timeout: 10_000 })
+      .catch(() => undefined);
     await maybeScreenshot(session.page, config, "01_home.png");
 
+    // 중요:
+    // 메인 페이지에서 LLM이 "채용정보"를 잘못 클릭하면 /jobs/list/domestic 으로 빠지고,
+    // 이후 직업/지역/경력 조건 적용이 불안정해진다.
+    // 3번은 AI 에이전트형이지만, 시작 지점은 IT개발·데이터 직업별 페이지로 고정한다.
+    logStep(2, "IT개발·데이터 직업별 페이지로 직접 이동");
+    await session.page.goto(config.jobCategoryUrl, {
+      waitUntil: "domcontentloaded",
+    });
+    await session.page
+      .waitForLoadState("networkidle", { timeout: 10_000 })
+      .catch(() => undefined);
+    await maybeScreenshot(session.page, config, "02_job_category.png");
+
+    console.log(`[agent] 시작 URL 보정 완료: ${session.page.url()}`);
+
+    await session.page.goto(config.jobCategoryUrl, {
+      waitUntil: "domcontentloaded",
+    });
     const agentResult = await runAgentLoop(session.page, config);
     if (!agentResult.success) {
-      await writeDebugArtifacts(session.page, config, agentResult.reason, "debug");
+      await writeDebugArtifacts(
+        session.page,
+        config,
+        agentResult.reason,
+        "debug",
+      );
       throw new Error(agentResult.reason);
     }
 
@@ -113,7 +162,12 @@ export const crawlSaraminWithAgent = async (config: AppConfig): Promise<JobPosti
     const extracted = await collectListPages(session.page, config);
 
     if (extracted.length === 0) {
-      await writeDebugArtifacts(session.page, config, "결과 목록에서 공고를 추출하지 못했습니다.", "debug");
+      await writeDebugArtifacts(
+        session.page,
+        config,
+        "결과 목록에서 공고를 추출하지 못했습니다.",
+        "debug",
+      );
       return [];
     }
 

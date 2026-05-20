@@ -19,9 +19,9 @@ const makeCandidateSelectors = (progress: GoalProgress): string[] => {
     ...resultSelectors,
     'a[href*="/zf_user/jobs/relay/view"]',
     'a[href*="rec_idx="]',
-    'button:visible',
-    'a:visible',
-    'input:visible',
+    "button:visible",
+    "a:visible",
+    "input:visible",
   ];
 
   if (!progress.regionSelected) {
@@ -66,23 +66,35 @@ const collectCandidates = async (
     const locators = page.locator(entry.selector);
     const count = await locators.count().catch(() => 0);
 
-    for (let index = 0; index < count && candidates.length < limit; index += 1) {
+    for (
+      let index = 0;
+      index < count && candidates.length < limit;
+      index += 1
+    ) {
       const locator = locators.nth(index);
       if (!(await locator.isVisible().catch(() => false))) {
         continue;
       }
 
-      const [innerText, value, placeholder, ariaLabel, title, href, name, type] =
-        await Promise.all([
-          locator.innerText({ timeout: 1000 }).catch(() => ""),
-          locator.inputValue({ timeout: 1000 }).catch(() => ""),
-          locator.getAttribute("placeholder").catch(() => ""),
-          locator.getAttribute("aria-label").catch(() => ""),
-          locator.getAttribute("title").catch(() => ""),
-          locator.getAttribute("href").catch(() => ""),
-          locator.getAttribute("name").catch(() => ""),
-          locator.getAttribute("type").catch(() => ""),
-        ]);
+      const [
+        innerText,
+        value,
+        placeholder,
+        ariaLabel,
+        title,
+        href,
+        name,
+        type,
+      ] = await Promise.all([
+        locator.innerText({ timeout: 1000 }).catch(() => ""),
+        locator.inputValue({ timeout: 1000 }).catch(() => ""),
+        locator.getAttribute("placeholder").catch(() => ""),
+        locator.getAttribute("aria-label").catch(() => ""),
+        locator.getAttribute("title").catch(() => ""),
+        locator.getAttribute("href").catch(() => ""),
+        locator.getAttribute("name").catch(() => ""),
+        locator.getAttribute("type").catch(() => ""),
+      ]);
 
       const text =
         normalizeText(innerText) ||
@@ -112,6 +124,42 @@ const collectCandidates = async (
   return candidates;
 };
 
+const getSelectedFilterText = async (page: Page): Promise<string> => {
+  const selectors = [
+    ".filter_selected",
+    ".selected",
+    ".selected_item",
+    ".area_selected",
+    ".choice_txt",
+    ".wrap_result",
+    ".result_txt",
+    ".main_option",
+    ".default_option",
+  ];
+
+  const chunks: string[] = [];
+
+  for (const selector of selectors) {
+    const locator = page.locator(selector);
+    const count = await locator.count().catch(() => 0);
+
+    for (let index = 0; index < Math.min(count, 10); index += 1) {
+      const text = normalizeText(
+        await locator
+          .nth(index)
+          .innerText({ timeout: 1000 })
+          .catch(() => ""),
+      );
+
+      if (text) {
+        chunks.push(text);
+      }
+    }
+  }
+
+  return normalizeText(chunks.join(" "));
+};
+
 const inferProgress = async (
   page: Page,
   bodyText: string,
@@ -119,20 +167,49 @@ const inferProgress = async (
   title: string,
 ): Promise<GoalProgress> => {
   const compact = normalizeText(bodyText);
+  const selectedFilterText = await getSelectedFilterText(page);
+
   const resultChecks = await Promise.all(
-    resultSelectors.map(async (selector) => (await page.locator(selector).count().catch(() => 0)) > 0),
+    resultSelectors.map(async (selector) => {
+      const count = await page
+        .locator(selector)
+        .count()
+        .catch(() => 0);
+      return count > 0;
+    }),
   );
+
   const isJobsListPage = /\/zf_user\/jobs\/list\//i.test(currentUrl);
+
   const resultListVisible = isJobsListPage && resultChecks.some(Boolean);
-  const urlLooksDone = isJobsListPage && /search_done=y|preview=y/i.test(currentUrl);
+
+  const urlLooksDone =
+    isJobsListPage && /search_done=y|preview=y/i.test(currentUrl);
+
+  const regionSelected =
+    /loc_mcd=101000/.test(currentUrl) ||
+    /지역\s*\(?1\)?\s*서울\s*전체/.test(selectedFilterText) ||
+    /서울\s*전체/.test(selectedFilterText) ||
+    /서울전체/.test(selectedFilterText);
+
+  const jobCategorySelected =
+    /cat_mcls=2/.test(currentUrl) ||
+    /job_mid_cd=2/.test(currentUrl) ||
+    /직업\s*\(?1\)?\s*IT개발\s*·\s*데이터/.test(selectedFilterText) ||
+    /IT개발\s*·\s*데이터\s*전체선택/.test(selectedFilterText);
+
+  const careerSelected =
+    /exp_max=1/.test(currentUrl) ||
+    /exp_cd=2/.test(currentUrl) ||
+    /경력\s*\(?1\)?\s*~\s*1년/.test(selectedFilterText) ||
+    /~\s*1년/.test(selectedFilterText) ||
+    /1년\s*이하/.test(selectedFilterText) ||
+    /1년\s*미만/.test(selectedFilterText);
 
   return {
-    regionSelected: /서울\s*전체|서울전체|loc_mcd=101000/i.test(compact) || /loc_mcd=101000/.test(currentUrl),
-    jobCategorySelected:
-      /IT개발\s*·\s*데이터|IT개발·데이터|cat_mcls=2/i.test(compact) || /cat_mcls=2/.test(currentUrl),
-    careerSelected: /경력무관|신입|신입\s*\/\s*경력|~\s*1년|1년\s*이하|1년\s*미만|0\s*~\s*1년/.test(
-      compact,
-    ),
+    regionSelected,
+    jobCategorySelected,
+    careerSelected,
     resultListVisible: resultListVisible || urlLooksDone,
     blockedOrCaptchaLikely: looksBlockedText(compact, currentUrl, title),
   };
@@ -146,7 +223,12 @@ export const observePage = async (
   const currentUrl = page.url();
   const title = await page.title().catch(() => "");
   const bodyText = truncate(
-    normalizeText(await page.locator("body").innerText({ timeout: 5000 }).catch(() => "")),
+    normalizeText(
+      await page
+        .locator("body")
+        .innerText({ timeout: 5000 })
+        .catch(() => ""),
+    ),
     6000,
   );
 
@@ -158,7 +240,9 @@ export const observePage = async (
   const screenshotPath = await maybeScreenshot(
     page,
     config,
-    step === 0 ? "01_home.png" : `agent_step_${String(step).padStart(3, "0")}.png`,
+    step === 0
+      ? "01_home.png"
+      : `agent_step_${String(step).padStart(3, "0")}.png`,
   );
 
   return {
