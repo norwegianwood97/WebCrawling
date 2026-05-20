@@ -122,11 +122,9 @@ const inferProgress = async (
   const resultChecks = await Promise.all(
     resultSelectors.map(async (selector) => (await page.locator(selector).count().catch(() => 0)) > 0),
   );
-  const resultListVisible = resultChecks.some(Boolean);
-
-  const urlLooksDone = /search_done=y|preview=y|loc_mcd=101000|cat_mcls=2|job_category/i.test(
-    currentUrl,
-  );
+  const isJobsListPage = /\/zf_user\/jobs\/list\//i.test(currentUrl);
+  const resultListVisible = isJobsListPage && resultChecks.some(Boolean);
+  const urlLooksDone = isJobsListPage && /search_done=y|preview=y/i.test(currentUrl);
 
   return {
     regionSelected: /서울\s*전체|서울전체|loc_mcd=101000/i.test(compact) || /loc_mcd=101000/.test(currentUrl),
@@ -153,6 +151,10 @@ export const observePage = async (
   );
 
   const progress = await inferProgress(page, bodyText, currentUrl, title);
+  console.log(
+    `[agent] step ${step} observe state: url=${currentUrl} regionSelected=${progress.regionSelected} jobCategorySelected=${progress.jobCategorySelected} careerSelected=${progress.careerSelected} resultListVisible=${progress.resultListVisible}`,
+  );
+
   const screenshotPath = await maybeScreenshot(
     page,
     config,

@@ -8,7 +8,16 @@ import { buildPrompt } from "./promptBuilder.js";
 import { requestNextAction } from "./llmClient.js";
 import { AgentHistoryItem, AgentLoopResult } from "./types.js";
 
-const doneByUrl = (url: string): boolean => /search_done=y|preview=y/i.test(url);
+const doneByUrl = (url: string): boolean =>
+  /\/zf_user\/jobs\/list\//i.test(url) && /search_done=y|preview=y/i.test(url);
+
+const isGoalConditionsReady = (observation: Awaited<ReturnType<typeof observePage>>): boolean =>
+  observation.progress.regionSelected &&
+  observation.progress.jobCategorySelected &&
+  observation.progress.careerSelected;
+
+const isSearchResultReady = (observation: Awaited<ReturnType<typeof observePage>>): boolean =>
+  observation.progress.resultListVisible || doneByUrl(observation.currentUrl);
 
 export const runAgentLoop = async (
   page: Page,
@@ -26,9 +35,13 @@ export const runAgentLoop = async (
       return { success: false, reason: "차단/CAPTCHA 의심 화면이 감지되어 중단했습니다.", steps: step };
     }
 
-    if (observation.progress.resultListVisible || doneByUrl(observation.currentUrl)) {
-      logAgent("조건 설정 완료");
-      return { success: true, reason: "결과 목록이 보입니다.", steps: step };
+    const goalConditionsReady = isGoalConditionsReady(observation);
+    const searchResultReady = isSearchResultReady(observation);
+
+    if (goalConditionsReady && searchResultReady) {
+      const reason = "목표 조건이 적용된 결과 목록이 보입니다.";
+      logAgent(`조건 설정 완료: ${reason}`);
+      return { success: true, reason, steps: step };
     }
 
     const prompt = buildPrompt(observation, history, failedHistory);
@@ -51,8 +64,17 @@ export const runAgentLoop = async (
     }
 
     if (action.action === "extract_results") {
-      logAgent("조건 설정 완료");
-      return { success: true, reason: "LLM이 결과 추출을 요청했습니다.", steps: step };
+      if (goalConditionsReady && searchResultReady) {
+        const reason = "LLM이 결과 추출을 요청했고 목표 조건이 준비되어 있습니다.";
+        logAgent(`조건 설정 완료: ${reason}`);
+        return { success: true, reason, steps: step };
+      }
+
+      const message =
+        "LLM이 결과 추출을 요청했지만 지역/직업/경력 조건 또는 채용 목록 페이지가 아직 준비되지 않았습니다.";
+      failedHistory.push({ step, action, success: false, message });
+      logAgent(`step ${step} action 보류: ${message}`);
+      continue;
     }
 
     if (action.action === "stop") {

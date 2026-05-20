@@ -7,6 +7,9 @@ const goal = `
 - 직업: IT개발·데이터
 - 직업 세부: IT개발·데이터 전체선택
 - 경력: ~1년 또는 1년차 지원 가능 공고
+
+메인 페이지에서 채용 목록 진입이 어렵다면 다음 사람인 직업별 목록 URL로 이동할 수 있다.
+https://www.saramin.co.kr/zf_user/jobs/list/job-category?cat_mcls=2
 `;
 
 const safetyRules = `
@@ -80,6 +83,6 @@ export const buildPrompt = (
     `현재 본문 일부:\n${observation.bodyText}`,
     `이전 행동 기록:\n${JSON.stringify(history.slice(-10), null, 2)}`,
     `실패한 행동 기록:\n${JSON.stringify(failedHistory.slice(-10), null, 2)}`,
-    "다음 한 단계만 결정하라. 결과 목록이 이미 보이면 extract_results를 반환하라.",
+    "다음 한 단계만 결정하라. 지역, 직업, 경력 조건이 모두 준비되고 채용 목록 결과 페이지가 보일 때만 extract_results를 반환하라.",
   ].join("\n\n");
 };

@@ -120,7 +120,13 @@ export const crawlSaraminWithAgent = async (config: AppConfig): Promise<JobPosti
     const filtered = extracted.filter((job) => isAllowedCareer(job.career));
     logResult(`경력 필터 통과 ${filtered.length}개`);
 
-    return enrichDetails(filtered.slice(0, config.maxItems), config, session.context);
+    const enriched = await enrichDetails(
+      filtered.slice(0, config.maxItems),
+      config,
+      session.context,
+    );
+
+    return enriched;
   } finally {
     await session.browser.close().catch(() => undefined);
   }
