@@ -4,35 +4,33 @@ import { AppConfig } from "./types.js";
 dotenv.config();
 
 const parseBoolean = (value: string | undefined, fallback: boolean): boolean => {
-  if (value === undefined) {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
     return fallback;
   }
 
-  return ["true", "1", "yes", "y"].includes(value.trim().toLowerCase());
+  return ["true", "1", "yes", "y"].includes(normalized);
 };
 
-const parsePositiveInt = (value: string | undefined, fallback: number): number => {
-  if (value === undefined) {
+const parseNonNegativeInt = (value: string | undefined, fallback: number): number => {
+  const normalized = value?.trim();
+  if (!normalized) {
     return fallback;
   }
 
-  const parsed = Number.parseInt(value, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  const parsed = Number.parseInt(normalized, 10);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 };
 
 export const loadConfig = (): AppConfig => ({
   headless: parseBoolean(process.env.HEADLESS, false),
-  maxItems: parsePositiveInt(process.env.MAX_ITEMS, 50),
-  maxPages: parsePositiveInt(process.env.MAX_PAGES, 3),
-  maxDetailPages: parsePositiveInt(process.env.MAX_DETAIL_PAGES, 50),
+  maxItems: parseNonNegativeInt(process.env.MAX_ITEMS, 0),
+  maxPages: parseNonNegativeInt(process.env.MAX_PAGES, 0),
   outputDir: process.env.OUTPUT_DIR?.trim() || "output",
   debugScreenshot: parseBoolean(process.env.DEBUG_SCREENSHOT, true),
-  crawlDelayMinMs: parsePositiveInt(process.env.CRAWL_DELAY_MIN_MS, 1000),
-  crawlDelayMaxMs: parsePositiveInt(process.env.CRAWL_DELAY_MAX_MS, 2500),
-  crawlDetailDelayMinMs: parsePositiveInt(process.env.CRAWL_DETAIL_DELAY_MIN_MS, 1500),
-  crawlDetailDelayMaxMs: parsePositiveInt(process.env.CRAWL_DETAIL_DELAY_MAX_MS, 3000),
+  crawlDelayMinMs: parseNonNegativeInt(process.env.CRAWL_DELAY_MIN_MS, 1000),
+  crawlDelayMaxMs: parseNonNegativeInt(process.env.CRAWL_DELAY_MAX_MS, 2500),
   saveXlsx: parseBoolean(process.env.SAVE_XLSX, true),
-  saveXlsxTimestamp: parseBoolean(process.env.SAVE_XLSX_TIMESTAMP, false),
   baseUrl: "https://www.saramin.co.kr/zf_user/",
   jobCategoryUrl: "https://www.saramin.co.kr/zf_user/jobs/list/job-category?cat_mcls=2",
   screenshotsDir: "screenshots"

@@ -10,7 +10,10 @@ export const logStep = (step: number, message: string): void => {
 export const normalizeText = (value: string | null | undefined): string =>
   (value ?? "").replace(/\s+/g, " ").trim();
 
-export const toAbsoluteUrl = (value: string | null | undefined, base = "https://www.saramin.co.kr"): string => {
+export const toAbsoluteUrl = (
+  value: string | null | undefined,
+  base = "https://www.saramin.co.kr",
+): string => {
   const text = normalizeText(value);
   if (!text) {
     return "";
@@ -23,9 +26,10 @@ export const toAbsoluteUrl = (value: string | null | undefined, base = "https://
   }
 };
 
-export const delay = (ms: number): Promise<void> => new Promise((resolve) => {
-  setTimeout(resolve, ms);
-});
+export const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 export const randomDelay = async (config: AppConfig): Promise<void> => {
   const min = Math.min(config.crawlDelayMinMs, config.crawlDelayMaxMs);
@@ -39,7 +43,11 @@ export const ensureDirectory = async (directory: string): Promise<void> => {
   await mkdir(directory, { recursive: true });
 };
 
-export const maybeScreenshot = async (page: Page, config: AppConfig, fileName: string): Promise<void> => {
+export const maybeScreenshot = async (
+  page: Page,
+  config: AppConfig,
+  fileName: string,
+): Promise<void> => {
   if (!config.debugScreenshot) {
     return;
   }
@@ -47,18 +55,24 @@ export const maybeScreenshot = async (page: Page, config: AppConfig, fileName: s
   await ensureDirectory(config.screenshotsDir);
   await page.screenshot({
     path: path.join(config.screenshotsDir, fileName),
-    fullPage: true
+    fullPage: true,
   });
 };
 
-export const writeDebugArtifacts = async (page: Page, config: AppConfig, reason: string): Promise<void> => {
+export const writeDebugArtifacts = async (
+  page: Page,
+  config: AppConfig,
+  reason: string,
+): Promise<void> => {
   await ensureDirectory(config.screenshotsDir);
 
   if (config.debugScreenshot) {
-    await page.screenshot({
-      path: path.join(config.screenshotsDir, "error.png"),
-      fullPage: true
-    }).catch(() => undefined);
+    await page
+      .screenshot({
+        path: path.join(config.screenshotsDir, "error.png"),
+        fullPage: true,
+      })
+      .catch(() => undefined);
   }
 
   const html = await page.content().catch((error: unknown) => {
@@ -90,7 +104,9 @@ export const dedupeJobs = (jobs: JobPosting[]): JobPosting[] => {
 };
 
 export const looksBlocked = async (page: Page): Promise<boolean> => {
-  const bodyText = normalizeText(await page.locator("body").innerText({ timeout: 3000 }).catch(() => ""));
+  const bodyText = normalizeText(
+    await page.locator("body").innerText({ timeout: 3000 }).catch(() => ""),
+  );
   const url = page.url().toLowerCase();
   const title = (await page.title().catch(() => "")).toLowerCase();
   const text = bodyText.toLowerCase();
@@ -103,16 +119,16 @@ export const looksBlocked = async (page: Page): Promise<boolean> => {
     /captcha\s+(verification|required|challenge)/,
     /보안문자\s*(입력|확인|인증)/,
     /자동입력\s*(방지|확인|문자)/,
-    /비정상적인\s*접근/,
-    /접근이\s*차단/,
-    /서비스\s*이용이\s*제한/
+    /비정상적\s*접근/,
+    /접근\s*차단/,
+    /서비스\s*이용\s*제한/,
   ];
 
   const chromeSignals = [
     /(^|[^\d])403([^\d]|$)/,
     /(^|[^\d])429([^\d]|$)/,
     /access\s+denied/,
-    /too\s+many\s+requests/
+    /too\s+many\s+requests/,
   ];
 
   return (

@@ -1,13 +1,12 @@
-import { Page } from "playwright";
+import { BrowserContext, Locator, Page } from "playwright";
 import {
   clickByCandidates,
   clickBySelectorCandidates,
   clickByTextCandidates,
   clickTextWithinVisibleLayer,
 } from "./clickHelpers.js";
-import { filterJobsByCareer, isCareerAllowed } from "./careerFilter.js";
+import { filterJobsByCareer } from "./careerFilter.js";
 import { parseJobCard } from "./parseJobCard.js";
-import { parseJobDetail, isValidJobDetailUrl } from "./parseJobDetail.js";
 import { selectors } from "./selectors.js";
 import {
   AppConfig,
@@ -17,7 +16,6 @@ import {
 } from "./types.js";
 import {
   dedupeJobs,
-  delay,
   logStep,
   looksBlocked,
   maybeScreenshot,
@@ -26,6 +24,24 @@ import {
   randomDelay,
   writeDebugArtifacts,
 } from "./utils.js";
+
+interface PageCollectionResult {
+  cardCount: number;
+  jobs: JobPosting[];
+}
+
+interface SearchClickResult {
+  clicked: boolean;
+  description: string;
+}
+
+const paginationSelector = "#default_list_wrap > div";
+const defaultPageSize = 50;
+const unexpectedJobPopupPattern = /\/zf_user\/jobs\/relay\/view/i;
+
+const selectorCandidates = (
+  values: readonly string[],
+): ClickCandidate[] => values.map((value) => ({ type: "selector", value }));
 
 const waitForPageSettled = async (page: Page): Promise<void> => {
   await page.waitForLoadState("domcontentloaded").catch(() => undefined);
@@ -43,14 +59,8 @@ const assertNotBlocked = async (
     return;
   }
 
-  await writeDebugArtifacts(
-    page,
-    config,
-    `${stepName} 단계에서 차단 또는 CAPTCHA 의심 화면 감지`,
-  );
-  throw new Error(
-    `${stepName}: 403/429/CAPTCHA/비정상 접근 의심 화면이 감지되어 즉시 중단합니다.`,
-  );
+  await writeDebugArtifacts(page, config, `${stepName} 차단 또는 CAPTCHA 의심 화면 감지`);
+  throw new Error(`${stepName}: 403/429/CAPTCHA/비정상 접근 의심 화면이 감지되어 중단합니다.`);
 };
 
 const gotoWithSafety = async (
@@ -72,14 +82,6 @@ const gotoWithSafety = async (
 
   await waitForPageSettled(page);
   await assertNotBlocked(page, config, stepName);
-};
-
-const randomDetailDelay = async (config: AppConfig): Promise<void> => {
-  const min = Math.min(config.crawlDetailDelayMinMs, config.crawlDetailDelayMaxMs);
-  const max = Math.max(config.crawlDetailDelayMinMs, config.crawlDetailDelayMaxMs);
-  const waitMs = min + Math.floor(Math.random() * (max - min + 1));
-  console.log(`상세 페이지 방문 전 대기: ${waitMs}ms`);
-  await delay(waitMs);
 };
 
 const clickOptionalLayerDone = async (
@@ -106,33 +108,22 @@ const openRecruitPage = async (
   page: Page,
   config: AppConfig,
 ): Promise<void> => {
-  logStep(2, "사람인 접속 시도");
-
+  logStep(2, "사람인 접속");
   await gotoWithSafety(page, config, config.baseUrl, "사람인 메인 접속");
   await maybeScreenshot(page, config, "01_home.png");
-  logStep(2, "사람인 접속 완료");
 
-  // getByText("채용정보")는 배너/추천/다른 메뉴를 클릭할 수 있어 사용하지 않습니다.
-  // 수집 기준점인 IT개발·데이터 직업별 페이지로 직접 이동합니다.
-  logStep(3, "IT개발·데이터 직업별 페이지로 직접 이동");
-
+  logStep(3, "IT개발·데이터 직업별 페이지 이동");
   await gotoWithSafety(
     page,
     config,
     config.jobCategoryUrl,
-    "IT개발·데이터 직업별 URL 직접 이동",
+    "IT개발·데이터 직업별 URL 이동",
   );
-
   await maybeScreenshot(page, config, "02_jobs_page.png");
-  console.log(`직접 이동 후 현재 URL: ${page.url()}`);
 
   if (!page.url().includes("cat_mcls=2")) {
-    console.warn(
-      `직접 이동 후에도 cat_mcls=2가 URL에 없습니다. 현재 URL: ${page.url()}`,
-    );
+    console.warn(`IT개발·데이터 직업 조건이 URL에 보이지 않습니다. 현재 URL: ${page.url()}`);
   }
-
-  logStep(3, "채용정보 페이지 이동 완료");
 };
 
 const selectRegionSeoul = async (
@@ -145,18 +136,13 @@ const selectRegionSeoul = async (
     [
       { type: "text", value: "지역 선택" },
       { type: "text", value: "지역" },
-      ...selectors.regionOpenButtons.map<ClickCandidate>((value) => ({
-        type: "selector",
-        value,
-      })),
+      ...selectorCandidates(selectors.regionOpenButtons),
     ],
     "지역 선택 열기",
   );
 
   if (!openResult.success) {
-    throw new Error(
-      "지역 선택 버튼을 찾지 못했습니다. src/selectors.ts의 지역 선택 후보를 확인하세요.",
-    );
+    throw new Error("지역 선택 버튼을 찾지 못했습니다. src/selectors.ts의 지역 selector를 확인하세요.");
   }
 
   await page.waitForTimeout(500);
@@ -176,9 +162,7 @@ const selectRegionSeoul = async (
       );
 
   if (!textResult.success) {
-    throw new Error(
-      "서울 전체 선택 버튼을 찾지 못했습니다. 지역 선택 레이어 구조가 변경되었을 수 있습니다.",
-    );
+    throw new Error("서울 전체 선택 버튼을 찾지 못했습니다. 지역 선택 레이어 구조가 바뀌었을 수 있습니다.");
   }
 
   await page.waitForTimeout(400);
@@ -194,11 +178,9 @@ const selectJobCategory = async (
   page: Page,
   config: AppConfig,
 ): Promise<void> => {
-  logStep(5, "직업 선택: IT개발·데이터 확인");
+  logStep(5, "직업 선택 확인");
   if (await isJobCategoryAlreadyApplied(page)) {
-    console.log(
-      "URL에 cat_mcls=2가 있어 IT개발·데이터 직업 조건이 적용된 것으로 판단합니다.",
-    );
+    console.log("URL에 cat_mcls=2가 있어 IT개발·데이터 직업 조건이 적용된 것으로 판단합니다.");
     return;
   }
 
@@ -207,18 +189,13 @@ const selectJobCategory = async (
     [
       { type: "text", value: "직업 선택" },
       { type: "text", value: "직업" },
-      ...selectors.jobOpenButtons.map<ClickCandidate>((value) => ({
-        type: "selector",
-        value,
-      })),
+      ...selectorCandidates(selectors.jobOpenButtons),
     ],
     "직업 선택 열기",
   );
 
   if (!openResult.success) {
-    throw new Error(
-      "직업 선택 버튼을 찾지 못했습니다. 직업별 URL 적용 여부와 selector를 확인하세요.",
-    );
+    throw new Error("직업 선택 버튼을 찾지 못했습니다. 직업별 URL 적용 여부와 selector를 확인하세요.");
   }
 
   await page.waitForTimeout(500);
@@ -289,17 +266,14 @@ const selectCareer = async (
   page: Page,
   config: AppConfig,
 ): Promise<CareerUiResult> => {
-  logStep(6, "경력 선택 시도");
+  logStep(6, "경력 선택: ~1년");
   const opened = await clickByCandidates(
     page,
     [
       { type: "text", value: "경력선택" },
       { type: "text", value: "경력 선택" },
       { type: "text", value: "경력" },
-      ...selectors.careerOpenButtons.map<ClickCandidate>((value) => ({
-        type: "selector",
-        value,
-      })),
+      ...selectorCandidates(selectors.careerOpenButtons),
     ],
     "경력 선택 열기",
   );
@@ -308,7 +282,7 @@ const selectCareer = async (
     return {
       attempted: true,
       selected: false,
-      reason: "경력 선택 버튼을 찾지 못해 후처리 필터링만 사용합니다.",
+      reason: "경력 선택 버튼을 찾지 못해 후처리 필터만 사용합니다.",
     };
   }
 
@@ -318,7 +292,7 @@ const selectCareer = async (
 
   if (
     labelText &&
-    /(~\s*1년|1년\s*이하|1년\s*미만|1년|경력\s*1년)/.test(labelText)
+    /(~\s*1년|1년\s*이하|1년\s*미만|경력\s*1년)/.test(labelText)
   ) {
     await page
       .locator(selectors.careerCheckbox)
@@ -352,35 +326,111 @@ const selectCareer = async (
   return {
     attempted: true,
     selected: false,
-    reason: `#btn_check_career_over0 의미가 불확실하여 UI 선택은 건너뜁니다. label="${labelText}"`,
+    reason: `#btn_check_career_over0 후보가 불확실하여 UI 선택은 건너뜁니다. label="${labelText}"`,
   };
 };
 
 const clickSearch = async (page: Page, config: AppConfig): Promise<void> => {
   logStep(7, "검색 버튼 클릭");
-  const selectorClicked = await clickBySelectorCandidates(
-    page,
-    [...selectors.searchButtons],
-    "검색 버튼",
-  );
-  const clicked = selectorClicked.success
-    ? selectorClicked
-    : await clickByTextCandidates(page, ["검색하기"], "검색 버튼");
 
-  if (!clicked.success) {
+  const popupCloser = closeUnexpectedJobPopups(page.context());
+  const clickResult = await dispatchSearchButtonClick(page);
+  await popupCloser.stop();
+
+  if (!clickResult.clicked) {
     throw new Error("검색 버튼을 찾지 못했습니다.");
   }
+  console.log(`검색 버튼 클릭 대상: ${clickResult.description}`);
 
   await waitForPageSettled(page);
   await maybeScreenshot(page, config, "05_after_search.png");
   await assertNotBlocked(page, config, "검색 버튼 클릭 후");
 };
 
+const dispatchSearchButtonClick = async (page: Page): Promise<SearchClickResult> => {
+  return page
+    .evaluate((buttonSelectors) => {
+      const candidates = buttonSelectors
+        .flatMap((selector) => Array.from(document.querySelectorAll<HTMLElement>(selector)))
+        .filter((element, index, elements) => elements.indexOf(element) === index);
+
+      const searchButton = candidates.find((element) => {
+        const style = window.getComputedStyle(element);
+        const rect = element.getBoundingClientRect();
+
+        return (
+          style.display !== "none" &&
+          style.visibility !== "hidden" &&
+          rect.width > 0 &&
+          rect.height > 0 &&
+          element.matches("div#sp_preview button#search_btn")
+        );
+      });
+
+      if (!searchButton) {
+        return {
+          clicked: false,
+          description: "not-found",
+        };
+      }
+
+      const text = (searchButton.textContent ?? "").replace(/\s+/g, " ").trim();
+      const description = [
+        searchButton.tagName.toLowerCase(),
+        searchButton.id ? `#${searchButton.id}` : "",
+        searchButton.className ? `.${String(searchButton.className).trim().replace(/\s+/g, ".")}` : "",
+        text ? `text="${text}"` : "",
+      ]
+        .filter(Boolean)
+        .join("");
+
+      searchButton.click();
+      return {
+        clicked: true,
+        description,
+      };
+    }, [...selectors.searchButtons]);
+};
+
+const closeUnexpectedJobPopups = (
+  context: BrowserContext,
+): { stop: () => Promise<void> } => {
+  const openedPages: Page[] = [];
+  const handler = (popup: Page): void => {
+    openedPages.push(popup);
+    popup
+      .waitForLoadState("domcontentloaded", { timeout: 3000 })
+      .catch(() => undefined)
+      .finally(async () => {
+        if (unexpectedJobPopupPattern.test(popup.url())) {
+          console.warn(`예상치 못한 공고 새 창을 닫습니다: ${popup.url()}`);
+          await popup.close().catch(() => undefined);
+        }
+      });
+  };
+
+  context.on("page", handler);
+
+  return {
+    stop: async (): Promise<void> => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1200);
+      });
+      context.off("page", handler);
+
+      for (const popup of openedPages) {
+        if (!popup.isClosed() && unexpectedJobPopupPattern.test(popup.url())) {
+          await popup.close().catch(() => undefined);
+        }
+      }
+    },
+  };
+};
+
 const waitForResults = async (
   page: Page,
   config: AppConfig,
 ): Promise<string> => {
-  logStep(8, "결과 목록 로딩 대기");
   for (const selector of selectors.jobCards) {
     const locator = page.locator(selector);
     try {
@@ -388,7 +438,7 @@ const waitForResults = async (
       const count = await locator.count();
       if (count > 0) {
         await maybeScreenshot(page, config, "06_results.png");
-        logStep(8, `결과 목록 로딩 완료 (${selector}, ${count}개 후보)`);
+        logStep(8, "결과 목록 로딩 완료");
         return selector;
       }
     } catch {
@@ -397,39 +447,36 @@ const waitForResults = async (
   }
 
   console.error(`현재 URL: ${page.url()}`);
-  console.error(
-    `페이지 제목: ${await page.title().catch(() => "제목 확인 실패")}`,
-  );
+  console.error(`페이지 제목: ${await page.title().catch(() => "제목 확인 실패")}`);
   await printHtmlSnippet(page);
   await writeDebugArtifacts(page, config, "결과 목록 selector 실패");
-  throw new Error(
-    "결과 목록을 찾지 못했습니다. src/selectors.ts의 jobCards 후보를 확인하세요.",
-  );
+  throw new Error("결과 목록을 찾지 못했습니다. src/selectors.ts의 jobCards 후보를 확인하세요.");
 };
 
 const collectJobsOnCurrentPage = async (
   page: Page,
   selector: string,
-  limit: number,
-): Promise<JobPosting[]> => {
+): Promise<PageCollectionResult> => {
   const cards = page.locator(selector);
-  const count = await cards.count();
+  const cardCount = await cards.count();
   const jobs: JobPosting[] = [];
 
-  for (let index = 0; index < count && jobs.length < limit; index += 1) {
-    const card = cards.nth(index);
-    try {
-      const parsed = await parseJobCard(card, page.url());
-      if (parsed) {
-        jobs.push(parsed);
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`공고 카드 ${index + 1} 파싱 실패: ${message}`);
+  for (let index = 0; index < cardCount; index += 1) {
+    const parsed = await parseJobCard(cards.nth(index), page.url());
+    if (parsed) {
+      jobs.push(parsed);
     }
   }
 
-  return jobs;
+  return { cardCount, jobs };
+};
+
+const getSearchResultCount = async (page: Page): Promise<number> => {
+  const rawText = normalizeText(
+    await page.locator("#sp_preview_total_cnt").innerText({ timeout: 3000 }).catch(() => ""),
+  );
+  const parsed = Number.parseInt(rawText.replace(/[^\d]/g, ""), 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 };
 
 const firstRecruitKey = async (
@@ -447,51 +494,71 @@ const firstRecruitKey = async (
   ).slice(0, 120);
 };
 
-const clickNextPage = async (
-  page: Page,
-  currentPage: number,
-  selector: string,
-): Promise<boolean> => {
-  const previousFirstKey = await firstRecruitKey(page, selector);
+const getPaginationRoot = (page: Page) => page.locator(paginationSelector).last();
 
-  const nextCandidates = [
-    page.getByText("다음", { exact: false }),
-    page.locator('a[aria-label="다음"]'),
-    page.getByText(String(currentPage + 1), { exact: true }),
+const waitForPageChanged = async (
+  page: Page,
+  selector: string,
+  previousFirstKey: string,
+): Promise<boolean> => {
+  await waitForPageSettled(page);
+  return page
+    .waitForFunction(
+      ({ cardSelector, previous }) => {
+        const first = document.querySelector(cardSelector);
+        const key =
+          first?.id ||
+          first?.textContent?.replace(/\s+/g, " ").trim().slice(0, 120) ||
+          "";
+        return key.length > 0 && key !== previous;
+      },
+      { cardSelector: selector, previous: previousFirstKey },
+      { timeout: 10_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+};
+
+const clickVisibleLocator = async (locator: Locator): Promise<boolean> => {
+  const count = await locator.count().catch(() => 0);
+  for (let index = 0; index < count; index += 1) {
+    const item = locator.nth(index);
+    if (!(await item.isVisible().catch(() => false))) {
+      continue;
+    }
+
+    const className = await item.getAttribute("class").catch(() => "");
+    const ariaDisabled = await item.getAttribute("aria-disabled").catch(() => "");
+    if (className?.includes("disabled") || ariaDisabled === "true") {
+      continue;
+    }
+
+    await item.click({ timeout: 5000 });
+    return true;
+  }
+
+  return false;
+};
+
+const clickPageNumber = async (
+  page: Page,
+  pageNumber: number,
+): Promise<boolean> => {
+  const pagination = getPaginationRoot(page);
+  const pageButton = pagination.getByText(String(pageNumber), { exact: true });
+  return clickVisibleLocator(pageButton);
+};
+
+const clickNextPageGroup = async (page: Page): Promise<boolean> => {
+  const pagination = getPaginationRoot(page);
+  const candidates = [
+    pagination.getByText("다음", { exact: false }),
+    pagination.locator('a[aria-label="다음"], button[aria-label="다음"]'),
+    pagination.locator('a:has-text("다음"), button:has-text("다음")'),
   ];
 
-  for (const locator of nextCandidates) {
-    const count = await locator.count().catch(() => 0);
-    for (let index = 0; index < count; index += 1) {
-      const item = locator.nth(index);
-      if (!(await item.isVisible().catch(() => false))) {
-        continue;
-      }
-
-      const className = await item.getAttribute("class").catch(() => "");
-      const ariaDisabled = await item
-        .getAttribute("aria-disabled")
-        .catch(() => "");
-      if (className?.includes("disabled") || ariaDisabled === "true") {
-        continue;
-      }
-
-      await item.click({ timeout: 5000 });
-      await waitForPageSettled(page);
-      await page
-        .waitForFunction(
-          ({ cardSelector, previous }) => {
-            const first = document.querySelector(cardSelector);
-            const key =
-              first?.id ||
-              first?.textContent?.replace(/\s+/g, " ").trim().slice(0, 120) ||
-              "";
-            return key.length > 0 && key !== previous;
-          },
-          { cardSelector: selector, previous: previousFirstKey },
-          { timeout: 10_000 },
-        )
-        .catch(() => undefined);
+  for (const candidate of candidates) {
+    if (await clickVisibleLocator(candidate)) {
       return true;
     }
   }
@@ -499,108 +566,84 @@ const clickNextPage = async (
   return false;
 };
 
-const markDetailFailure = (job: JobPosting, message: string): void => {
-  job.main_tasks = "";
-  job.requirements = "";
-  job.preferred = "";
-  job.hiring_process = "";
-  job.benefits = "";
-  job.work_conditions = "";
-  job.tech_stack = "";
-  job.detail_text = "";
-  job.detail_error = message;
-};
-
-const normalizeJobDetailFields = (job: JobPosting): void => {
-  job.main_tasks = job.main_tasks ?? "";
-  job.requirements = job.requirements ?? "";
-  job.preferred = job.preferred ?? "";
-  job.hiring_process = job.hiring_process ?? "";
-  job.benefits = job.benefits ?? "";
-  job.work_conditions = job.work_conditions ?? "";
-  job.tech_stack = job.tech_stack ?? "";
-  job.detail_text = job.detail_text ?? "";
-  job.detail_error = job.detail_error ?? "";
-};
-
-const enrichJobsWithDetails = async (
+const moveToPage = async (
   page: Page,
-  config: AppConfig,
-  jobs: JobPosting[],
-): Promise<JobPosting[]> => {
-  const detailLimit = Math.min(config.maxDetailPages, jobs.length);
-  logStep(11, `상세 페이지 추가 수집 시작: 최대 ${detailLimit}개`);
+  targetPage: number,
+  selector: string,
+): Promise<boolean> => {
+  const previousFirstKey = await firstRecruitKey(page, selector);
 
-  for (const job of jobs) {
-    normalizeJobDetailFields(job);
+  if (await clickPageNumber(page, targetPage)) {
+    await waitForPageChanged(page, selector, previousFirstKey);
+    return true;
   }
 
-  let visited = 0;
-  for (const job of jobs) {
-    if (visited >= detailLimit) {
-      break;
+  if (await clickNextPageGroup(page)) {
+    if (await waitForPageChanged(page, selector, previousFirstKey)) {
+      return true;
     }
 
-    if (!isValidJobDetailUrl(job.job_url)) {
-      markDetailFailure(job, `유효한 공고 상세 URL이 아닙니다: ${job.job_url}`);
-      console.warn(`[detail_skip] ${job.recruit_id || job.title}: ${job.detail_error}`);
-      continue;
+    if (await clickPageNumber(page, targetPage)) {
+      await waitForPageChanged(page, selector, previousFirstKey);
+      return true;
     }
 
-    visited += 1;
-    try {
-      await randomDetailDelay(config);
-      console.log(`[detail] ${visited}/${detailLimit} ${job.company_name} - ${job.title}`);
-
-      const response = await page.goto(job.job_url, {
-        waitUntil: "domcontentloaded",
-        timeout: 30_000,
-      });
-
-      const status = response?.status();
-      if (status === 403 || status === 429) {
-        throw new Error(`상세 페이지 HTTP ${status} 응답`);
-      }
-
-      await waitForPageSettled(page);
-      if (await looksBlocked(page)) {
-        await writeDebugArtifacts(page, config, "상세 페이지 차단 의심").catch(() => undefined);
-        throw new Error("상세 페이지 CAPTCHA/차단 의심 화면 감지");
-      }
-
-      const detail = await parseJobDetail(page);
-      Object.assign(job, detail);
-      normalizeJobDetailFields(job);
-      console.log(
-        `[detail_parse] text=${job.detail_text.length} main=${job.main_tasks.length} req=${job.requirements.length} pref=${job.preferred.length} tech=${job.tech_stack.length} error=${job.detail_error}`,
-      );
-
-      if (job.detail_text.length < 300) {
-        console.warn(
-          "[detail_warn] detail_text가 비어 있거나 너무 짧습니다. selector 또는 이미지형 공고 가능성을 확인하세요.",
-        );
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      markDetailFailure(job, message);
-      console.warn(`[detail_skip] ${job.recruit_id || job.title}: ${message}`);
-      await writeDebugArtifacts(page, config, `상세 페이지 스킵: ${message}`).catch(() => undefined);
-      continue;
-    }
+    return false;
   }
 
-  logStep(12, `상세 페이지 추가 수집 완료: ${visited}개 방문`);
-  for (const job of jobs) {
-    normalizeJobDetailFields(job);
-  }
-  return jobs;
+  return false;
 };
+
+const resolveTargetPageCount = (
+  totalCount: number,
+  firstPageCardCount: number,
+  config: AppConfig,
+): number => {
+  const pageSize = firstPageCardCount > 0 ? firstPageCardCount : defaultPageSize;
+  const pagesFromTotal = totalCount > 0 ? Math.ceil(totalCount / pageSize) : 0;
+  const configuredLimit = config.maxPages > 0 ? config.maxPages : Number.POSITIVE_INFINITY;
+
+  if (pagesFromTotal > 0) {
+    return Math.min(pagesFromTotal, configuredLimit);
+  }
+
+  return configuredLimit;
+};
+
+const applyMaxItems = (jobs: JobPosting[], config: AppConfig): JobPosting[] => {
+  if (config.maxItems <= 0) {
+    return jobs;
+  }
+
+  return jobs.slice(0, config.maxItems);
+};
+
+const filterJobsWithUiFallback = (
+  jobs: JobPosting[],
+  careerResult: CareerUiResult,
+): JobPosting[] => {
+  const filtered = filterJobsByCareer(jobs);
+  if (filtered.length > 0 || !careerResult.selected || jobs.length === 0) {
+    return filtered;
+  }
+
+  console.warn("경력 UI 필터는 성공했지만 카드의 career 텍스트 추출이 비어 있어 UI 필터 결과를 신뢰해 저장합니다.");
+  return jobs.map((job) => ({
+    ...job,
+    career: job.career || "~1년(UI필터)",
+  }));
+};
+
+const mergeAndLimitJobs = (
+  existingJobs: JobPosting[],
+  nextJobs: JobPosting[],
+  config: AppConfig,
+): JobPosting[] => applyMaxItems(dedupeJobs([...existingJobs, ...nextJobs]), config);
 
 export const crawlSaraminJobs = async (
   page: Page,
   config: AppConfig,
 ): Promise<JobPosting[]> => {
-  logStep(1, "브라우저 실행");
   await openRecruitPage(page, config);
   await selectRegionSeoul(page, config);
   await selectJobCategory(page, config);
@@ -611,67 +654,57 @@ export const crawlSaraminJobs = async (
   await clickSearch(page, config);
 
   let resultSelector = await waitForResults(page, config);
-  let allJobs: JobPosting[] = [];
+  const totalCount = await getSearchResultCount(page);
+  if (totalCount > 0) {
+    console.log(`검색 결과 총 ${totalCount}건 확인`);
+  } else {
+    console.warn("#sp_preview_total_cnt 값을 찾지 못했습니다. 페이지 버튼이 없어질 때까지 수집합니다.");
+  }
 
-  for (
-    let pageNumber = 1;
-    pageNumber <= config.maxPages && allJobs.length < config.maxItems;
-    pageNumber += 1
-  ) {
+  let allJobs: JobPosting[] = [];
+  let targetPageCount = 1;
+
+  for (let pageNumber = 1; pageNumber <= targetPageCount; pageNumber += 1) {
     resultSelector = await waitForResults(page, config);
-    const remaining = config.maxItems - allJobs.length;
-    const pageJobs = await collectJobsOnCurrentPage(
+    const { cardCount, jobs: pageJobs } = await collectJobsOnCurrentPage(
       page,
       resultSelector,
-      remaining,
     );
-    console.table(
-      pageJobs.slice(0, 5).map((job) => ({
-        title: job.title,
-        company: job.company_name,
-        career: job.career,
-        location: job.location,
-        education: job.education,
-      })),
-    );
-    logStep(9, `${pageNumber}페이지 공고 ${pageJobs.length}개 발견`);
 
-    let filtered = filterJobsByCareer(pageJobs);
-    if (filtered.length === 0 && careerResult.selected && pageJobs.length > 0) {
-      console.warn(
-        "경력 UI 필터는 성공했지만 career 텍스트 추출이 일부 실패했습니다. UI 필터 결과를 신뢰하여 저장합니다.",
-      );
-      filtered = pageJobs.map((job) => ({
-        ...job,
-        career: job.career || "~1년(UI필터)",
-      }));
+    if (pageNumber === 1) {
+      targetPageCount = resolveTargetPageCount(totalCount, cardCount, config);
+      if (Number.isFinite(targetPageCount)) {
+        console.log(`수집 대상 페이지 수: ${targetPageCount}페이지`);
+      } else {
+        console.log("수집 대상 페이지 수: 페이지 버튼이 없어질 때까지");
+      }
     }
 
-    logStep(10, `경력 필터 통과 ${filtered.length}개`);
-    allJobs = dedupeJobs([...allJobs, ...filtered]).slice(0, config.maxItems);
+    logStep(9, `${pageNumber}페이지 공고 ${cardCount}개 발견`);
 
-    if (allJobs.length >= config.maxItems || pageNumber >= config.maxPages) {
+    const filtered = filterJobsWithUiFallback(pageJobs, careerResult);
+    logStep(10, `경력 필터 통과 ${filtered.length}개`);
+    allJobs = mergeAndLimitJobs(allJobs, filtered, config);
+
+    if (config.maxItems > 0 && allJobs.length >= config.maxItems) {
+      console.log(`MAX_ITEMS=${config.maxItems}에 도달해 수집을 종료합니다.`);
       break;
     }
 
-    const moved = await clickNextPage(page, pageNumber, resultSelector);
+    if (pageNumber >= targetPageCount) {
+      break;
+    }
+
+    const moved = await moveToPage(page, pageNumber + 1, resultSelector);
     if (!moved) {
-      console.log("다음 페이지 버튼이 없어 수집을 종료합니다.");
+      console.log("다음 페이지 또는 다음 페이지 그룹 버튼이 없어 수집을 종료합니다.");
       break;
     }
 
     await randomDelay(config);
-    await assertNotBlocked(page, config, "페이지네이션 후");
+    await assertNotBlocked(page, config, "페이지 이동 후");
   }
 
-  const excludedCount = allJobs.filter(
-    (job) => !isCareerAllowed(job.career),
-  ).length;
-  if (excludedCount > 0) {
-    console.warn(
-      `중복 제거 후 경력 조건 불일치 ${excludedCount}개가 감지되었습니다.`,
-    );
-  }
-
-  return enrichJobsWithDetails(page, config, allJobs);
+  logStep(11, `총 저장 공고 ${allJobs.length}개`);
+  return allJobs;
 };
